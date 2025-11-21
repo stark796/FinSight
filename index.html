@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinSight - Financial Document Analysis</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 100;
+        }
+        
+        .header h1 {
+            font-size: 1.5em;
+            font-weight: 600;
+        }
+        
+        .header-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        .doc-select {
+            padding: 8px 15px;
+            border: none;
+            border-radius: 5px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            font-size: 0.9em;
+        }
+        
+        .doc-select option {
+            background: #667eea;
+            color: white;
+        }
+        
+        .upload-btn, .new-chat-btn {
+            padding: 8px 15px;
+            border: none;
+            border-radius: 5px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+        
+        .upload-btn:hover, .new-chat-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        
+        .main-container {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+        
+        .sidebar {
+            width: 280px;
+            background: #2d2d2d;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #444;
+        }
+        
+        .sidebar-header {
+            padding: 15px;
+            border-bottom: 1px solid #444;
+        }
+        
+        .sidebar-header h2 {
+            font-size: 1.1em;
+            margin-bottom: 10px;
+        }
+        
+        .new-chat-sidebar-btn {
+            width: 100%;
+            padding: 10px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+        }
+        
+        .new-chat-sidebar-btn:hover {
+            background: #5568d3;
+        }
+        
+        .chat-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+        
+        .chat-item {
+            padding: 12px;
+            margin-bottom: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s;
+        }
+        
+        .chat-item:hover {
+            background: #3d3d3d;
+        }
+        
+        .chat-item.active {
+            background: #667eea;
+        }
+        
+        .chat-item-title {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 0.9em;
+        }
+        
+        .chat-item-delete {
+            background: transparent;
+            border: none;
+            color: #999;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 0.8em;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        
+        .chat-item:hover .chat-item-delete {
+            opacity: 1;
+        }
+        
+        .chat-item-delete:hover {
+            background: #ff4444;
+            color: white;
+        }
+        
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: white;
+            overflow: hidden;
+        }
+        
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .message {
+            display: flex;
+            gap: 12px;
+            animation: fadeIn 0.3s;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .message.user {
+            flex-direction: row-reverse;
+        }
+        
+        .message-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2em;
+            flex-shrink: 0;
+        }
+        
+        .message.user .message-avatar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .message.assistant .message-avatar {
+            background: #e0e0e0;
+            color: #666;
+        }
+        
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            line-height: 1.5;
+        }
+        
+        .message.user .message-content {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        
+        .message.assistant .message-content {
+            background: #f0f0f0;
+            color: #333;
+            border-bottom-left-radius: 4px;
+        }
+        
+        .message.assistant .message-content h3 {
+            margin-bottom: 8px;
+            color: #667eea;
+            font-size: 0.9em;
+        }
+        
+        .sources {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #ddd;
+            font-size: 0.85em;
+        }
+        
+        .source-item {
+            margin: 6px 0;
+            padding: 6px;
+            background: rgba(102, 126, 234, 0.1);
+            border-radius: 4px;
+        }
+        
+        .source-item strong {
+            color: #667eea;
+        }
+        
+        .chat-input-container {
+            padding: 20px;
+            border-top: 1px solid #e0e0e0;
+            background: white;
+        }
+        
+        .chat-input-wrapper {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+        
+        .chat-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 24px;
+            font-size: 1em;
+            resize: none;
+            max-height: 120px;
+            font-family: inherit;
+        }
+        
+        .chat-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .send-btn {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 24px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+        
+        .send-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .send-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .loading {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .loading-dots {
+            display: flex;
+            gap: 4px;
+        }
+        
+        .loading-dots span {
+            width: 8px;
+            height: 8px;
+            background: #667eea;
+            border-radius: 50%;
+            animation: bounce 1.4s infinite;
+        }
+        
+        .loading-dots span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        
+        .loading-dots span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+        
+        @keyframes bounce {
+            0%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-10px); }
+        }
+        
+        .upload-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .upload-modal.active {
+            display: flex;
+        }
+        
+        .upload-modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        
+        .upload-modal-content h2 {
+            margin-bottom: 20px;
+            color: #667eea;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+        
+        .message-time {
+            font-size: 0.75em;
+            color: #999;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📊 FinSight</h1>
+        <div class="header-controls">
+            <select id="docSelect" class="doc-select">
+                <option value="">Select Document...</option>
+            </select>
+            <button class="upload-btn" onclick="openUploadModal()">Upload Document</button>
+        </div>
+    </div>
+    
+    <div class="main-container">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h2>Chats</h2>
+                <button class="new-chat-sidebar-btn" onclick="createNewChat()">+ New Chat</button>
+            </div>
+            <div class="chat-list" id="chatList">
+                <!-- Chat items will be added here -->
+            </div>
+        </div>
+        
+        <div class="chat-container">
+        <div class="chat-messages" id="chatMessages">
+            <div class="message assistant">
+                <div class="message-avatar">🤖</div>
+                <div class="message-content">
+                    <p>Hello! I'm FinSight, your financial document analyst. Upload a document and ask me questions about it!</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="chat-input-container">
+            <div class="chat-input-wrapper">
+                <textarea 
+                    id="chatInput" 
+                    class="chat-input" 
+                    placeholder="Ask a question about your document..."
+                    rows="1"
+                    onkeydown="handleKeyDown(event)"
+                ></textarea>
+                <button id="sendBtn" class="send-btn" onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+    </div>
+    
+    <!-- Upload Modal -->
+    <div id="uploadModal" class="upload-modal">
+        <div class="upload-modal-content">
+            <h2>Upload Document</h2>
+            <form id="uploadForm">
+                <div class="form-group">
+                    <label for="file">PDF File</label>
+                    <input type="file" id="file" accept=".pdf" required>
+                </div>
+                <div class="form-group">
+                    <label for="company">Company Name (Optional)</label>
+                    <input type="text" id="company" placeholder="e.g., Apple Inc.">
+                </div>
+                <div class="form-group">
+                    <label for="year">Year (Optional)</label>
+                    <input type="number" id="year" placeholder="e.g., 2024">
+                </div>
+                <div class="modal-buttons">
+                    <button type="submit" class="btn btn-primary">Upload</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeUploadModal()">Cancel</button>
+                </div>
+            </form>
+            <div id="uploadMessage"></div>
+            <div id="uploadProgress" style="display: none; margin-top: 15px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                    <span id="progressText">Processing...</span>
+                    <span id="progressPercent">0%</span>
+                </div>
+                <div style="width: 100%; height: 20px; background: #e0e0e0; border-radius: 10px; overflow: hidden;">
+                    <div id="progressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #4CAF50, #45a049); transition: width 0.3s ease;"></div>
+                </div>
+                <div id="progressDetails" style="margin-top: 5px; font-size: 0.85em; color: #666;"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        let chats = {};
+        let currentChatId = null;
+        
+        // Load chats from localStorage
+        function loadChats() {
+            const saved = localStorage.getItem('finsight_chats');
+            if (saved) {
+                chats = JSON.parse(saved);
+            }
+            
+            // Create default chat if none exist
+            if (Object.keys(chats).length === 0) {
+                createNewChat();
+            } else {
+                // Load the first chat or most recent
+                const chatIds = Object.keys(chats);
+                currentChatId = chatIds[chatIds.length - 1]; // Most recent
+                loadChat(currentChatId);
+            }
+            
+            renderChatList();
+        }
+        
+        // Save chats to localStorage
+        function saveChats() {
+            localStorage.setItem('finsight_chats', JSON.stringify(chats));
+        }
+        
+        // Create a new chat
+        function createNewChat() {
+            const chatId = 'chat-' + Date.now();
+            const chatTitle = 'New Chat ' + (Object.keys(chats).length + 1);
+            
+            chats[chatId] = {
+                id: chatId,
+                title: chatTitle,
+                messages: [],
+                conversationHistory: [],
+                docId: currentDocId || '',
+                createdAt: new Date().toISOString()
+            };
+            
+            saveChats();
+            currentChatId = chatId;
+            loadChat(chatId);
+            renderChatList();
+        }
+        
+        // Load a specific chat
+        function loadChat(chatId) {
+            if (!chats[chatId]) return;
+            
+            currentChatId = chatId;
+            const chat = chats[chatId];
+            currentDocId = chat.docId;
+            
+            // Update document selector
+            document.getElementById('docSelect').value = chat.docId || '';
+            
+            // Clear and reload messages
+            const messagesDiv = document.getElementById('chatMessages');
+            messagesDiv.innerHTML = '';
+            
+            if (chat.messages.length === 0) {
+                // Don't save welcome message to chat
+                addMessageToDOM('assistant', 'Hello! I\'m FinSight, your financial document analyst. Upload a document and ask me questions about it!', new Date().toISOString());
+            } else {
+                chat.messages.forEach(msg => {
+                    addMessageToDOM(msg.role, msg.content, msg.timestamp);
+                });
+            }
+            
+            conversationHistory = chat.conversationHistory || [];
+            renderChatList();
+        }
+        
+        // Render chat list in sidebar
+        function renderChatList() {
+            const chatList = document.getElementById('chatList');
+            chatList.innerHTML = '';
+            
+            const sortedChats = Object.values(chats).sort((a, b) => 
+                new Date(b.createdAt) - new Date(a.createdAt)
+            );
+            
+            sortedChats.forEach(chat => {
+                const item = document.createElement('div');
+                item.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
+                item.onclick = () => loadChat(chat.id);
+                
+                // Get first user message or use title
+                const firstUserMsg = chat.messages.find(m => m.role === 'user');
+                const displayTitle = firstUserMsg ? 
+                    (firstUserMsg.content.substring(0, 30) + (firstUserMsg.content.length > 30 ? '...' : '')) : 
+                    chat.title;
+                
+                item.innerHTML = `
+                    <div class="chat-item-title">${displayTitle}</div>
+                    <button class="chat-item-delete" onclick="event.stopPropagation(); deleteChat('${chat.id}')">×</button>
+                `;
+                
+                chatList.appendChild(item);
+            });
+        }
+        
+        // Delete a chat
+        function deleteChat(chatId) {
+            if (Object.keys(chats).length <= 1) {
+                alert('You need at least one chat. Create a new one first!');
+                return;
+            }
+            
+            if (confirm('Delete this chat?')) {
+                delete chats[chatId];
+                saveChats();
+                
+                if (currentChatId === chatId) {
+                    // Switch to another chat
+                    const remainingChats = Object.keys(chats);
+                    if (remainingChats.length > 0) {
+                        loadChat(remainingChats[0]);
+                    }
+                } else {
+                    renderChatList();
+                }
+            }
+        }
+        
+        // Update current chat title from first message
+        function updateChatTitle(chatId, message) {
+            if (chats[chatId] && message.role === 'user') {
+                const title = message.content.substring(0, 30) + (message.content.length > 30 ? '...' : '');
+                chats[chatId].title = title;
+                saveChats();
+                renderChatList();
+            }
+        }
+        
+        // Save message to current chat
+        function saveMessageToChat(role, content) {
+            if (!currentChatId || !chats[currentChatId]) return;
+            
+            const message = {
+                role: role,
+                content: content,
+                timestamp: new Date().toISOString()
+            };
+            
+            chats[currentChatId].messages.push(message);
+            chats[currentChatId].docId = currentDocId;
+            
+            if (role === 'user') {
+                chats[currentChatId].conversationHistory.push({ role: 'user', content: content });
+            } else if (role === 'assistant') {
+                chats[currentChatId].conversationHistory.push({ role: 'assistant', content: content });
+            }
+            
+            // Keep conversation history to last 20 messages
+            if (chats[currentChatId].conversationHistory.length > 20) {
+                chats[currentChatId].conversationHistory = chats[currentChatId].conversationHistory.slice(-20);
+            }
+            
+            saveChats();
+            updateChatTitle(currentChatId, message);
+        }
+        
+        let conversationHistory = [];
+        let currentDocId = '';
+        
+        // Auto-resize textarea
+        document.getElementById('chatInput').addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+        
+        // Load documents and chats on startup
+        loadChats();
+        loadDocuments();
+        checkHealth();
+        
+        function checkHealth() {
+            fetch(`${API_BASE}/health`)
+                .then(r => r.json())
+                .then(data => console.log('API connected'))
+                .catch(err => {
+                    addMessage('assistant', '⚠️ Cannot connect to API. Make sure FastAPI server is running at http://localhost:8000');
+                });
+        }
+        
+        function loadDocuments() {
+            fetch(`${API_BASE}/documents`)
+                .then(r => r.json())
+                .then(data => {
+                    const select = document.getElementById('docSelect');
+                    select.innerHTML = '<option value="">Select Document...</option>';
+                    
+                    if (data.documents && data.documents.length > 0) {
+                        data.documents.forEach(doc => {
+                            const option = document.createElement('option');
+                            option.value = doc.doc_id;
+                            option.textContent = `${doc.filename || doc.doc_id}${doc.company ? ` (${doc.company})` : ''}`;
+                            select.appendChild(option);
+                        });
+                        
+                        // Auto-select first document
+                        if (!currentDocId && data.documents.length > 0) {
+                            currentDocId = data.documents[0].doc_id;
+                            select.value = currentDocId;
+                        }
+                    }
+                })
+                .catch(err => console.error('Error loading documents:', err));
+        }
+        
+        document.getElementById('docSelect').addEventListener('change', function() {
+            currentDocId = this.value;
+            if (currentChatId && chats[currentChatId]) {
+                chats[currentChatId].docId = currentDocId;
+                saveChats();
+            }
+            if (currentDocId) {
+                addMessage('assistant', `📄 Switched to document. You can now ask questions about it!`);
+            }
+        });
+        
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+        
+        function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const question = input.value.trim();
+            
+            if (!question) return;
+            if (!currentDocId) {
+                addMessage('assistant', '⚠️ Please select a document first using the dropdown above.');
+                return;
+            }
+            
+            // Add user message to chat
+            addMessage('user', question);
+            saveMessageToChat('user', question);
+            input.value = '';
+            input.style.height = 'auto';
+            
+            // Add loading message
+            const loadingId = addMessage('assistant', '', true);
+            
+            // Get conversation history from current chat
+            const chat = chats[currentChatId];
+            const history = (chat ? chat.conversationHistory : []).slice(-10).map(msg => ({
+                role: msg.role,
+                content: msg.content
+            }));
+            
+            // Send to API
+            fetch(`${API_BASE}/ask`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    question: question,
+                    doc_id: currentDocId,
+                    top_k: 10,
+                    conversation_history: history
+                })
+            })
+            .then(async r => {
+                if (!r.ok) {
+                    const errorData = await r.json().catch(() => ({ detail: 'Unknown error' }));
+                    removeMessage(loadingId);
+                    
+                    if (r.status === 423) {
+                        // Document still indexing
+                        addMessage('assistant', `⏳ ${errorData.detail || 'Document is still being indexed. Please wait for indexing to complete before asking questions.'}`);
+                    } else {
+                        addMessage('assistant', `❌ Error: ${errorData.detail || 'Failed to get answer'}`);
+                    }
+                    return;
+                }
+                
+                const data = await r.json();
+                
+                // Remove loading message
+                removeMessage(loadingId);
+                
+                // Add assistant response
+                let answerHtml = `<h3>Answer</h3><p>${formatAnswer(data.answer)}</p>`;
+                
+                if (data.sources && data.sources.length > 0) {
+                    answerHtml += '<div class="sources"><strong>Sources:</strong>';
+                    data.sources.forEach((source, idx) => {
+                        answerHtml += `<div class="source-item">
+                            <strong>Source ${idx + 1}</strong>${source.page ? ` (Page ${source.page})` : ''}<br>
+                            ${source.snippet ? source.snippet.substring(0, 150) + '...' : ''}
+                        </div>`;
+                    });
+                    answerHtml += '</div>';
+                }
+                
+                addMessage('assistant', answerHtml);
+                saveMessageToChat('assistant', data.answer);
+            })
+            .catch(err => {
+                removeMessage(loadingId);
+                addMessage('assistant', `❌ Error: ${err.message}`);
+            });
+        }
+        
+        function formatAnswer(text) {
+            // Convert markdown-style formatting to HTML
+            return text
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                .replace(/\[Source (\d+)\]/g, '<strong>[Source $1]</strong>')
+                .replace(/\n/g, '<br>');
+        }
+        
+        function addMessage(role, content, isLoading = false) {
+            const timestamp = new Date().toISOString();
+            return addMessageToDOM(role, content, timestamp, isLoading);
+        }
+        
+        function addMessageToDOM(role, content, timestamp, isLoading = false) {
+            const messagesDiv = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            const messageId = 'msg-' + Date.now() + '-' + Math.random();
+            messageDiv.id = messageId;
+            messageDiv.className = `message ${role}`;
+            
+            const avatar = role === 'user' ? '👤' : '🤖';
+            const time = timestamp ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 
+                       new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            if (isLoading) {
+                messageDiv.innerHTML = `
+                    <div class="message-avatar">${avatar}</div>
+                    <div class="message-content">
+                        <div class="loading">
+                            <div class="loading-dots">
+                                <span></span><span></span><span></span>
+                            </div>
+                            Thinking...
+                        </div>
+                    </div>
+                `;
+            } else {
+                messageDiv.innerHTML = `
+                    <div class="message-avatar">${avatar}</div>
+                    <div class="message-content">
+                        ${content}
+                        <div class="message-time">${time}</div>
+                    </div>
+                `;
+            }
+            
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            return messageId;
+        }
+        
+        function removeMessage(messageId) {
+            const msg = document.getElementById(messageId);
+            if (msg) msg.remove();
+        }
+        
+        function openUploadModal() {
+            document.getElementById('uploadModal').classList.add('active');
+        }
+        
+        function closeUploadModal() {
+            document.getElementById('uploadModal').classList.remove('active');
+            document.getElementById('uploadForm').reset();
+            document.getElementById('uploadMessage').innerHTML = '';
+            document.getElementById('uploadProgress').style.display = 'none';
+            document.getElementById('progressBar').style.width = '0%';
+        }
+        
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData();
+            const fileInput = document.getElementById('file');
+            const company = document.getElementById('company').value;
+            const year = document.getElementById('year').value;
+            
+            if (!fileInput.files[0]) {
+                document.getElementById('uploadMessage').innerHTML = '<p style="color: red;">Please select a file</p>';
+                return;
+            }
+            
+            formData.append('file', fileInput.files[0]);
+            if (company) formData.append('company', company);
+            if (year) formData.append('year', year);
+            
+            document.getElementById('uploadMessage').innerHTML = '<p>⏳ Uploading and indexing...</p>';
+            const progressDiv = document.getElementById('uploadProgress');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const progressPercent = document.getElementById('progressPercent');
+            const progressDetails = document.getElementById('progressDetails');
+            progressDiv.style.display = 'block';
+            
+            let uploadId = null;
+            let progressInterval = null;
+            
+            // Function to poll progress
+            function pollProgress(uploadId) {
+                progressInterval = setInterval(async () => {
+                    try {
+                        const progressResponse = await fetch(`${API_BASE}/upload/${uploadId}/progress`);
+                        if (progressResponse.ok) {
+                            const progress = await progressResponse.json();
+                            
+                            const percentage = Math.round(progress.percentage || 0);
+                            progressBar.style.width = percentage + '%';
+                            progressPercent.textContent = percentage + '%';
+                            
+                            const stageNames = {
+                                'parsing': 'Parsing PDF...',
+                                'parsing_complete': 'Parsing complete, starting embedding...',
+                                'embedding': 'Embedding chunks...',
+                                'storing': 'Storing in database...',
+                                'completed': 'Completed!'
+                            };
+                            
+                            progressText.textContent = stageNames[progress.stage] || 'Processing...';
+                            progressDetails.textContent = `${progress.completed || 0} / ${progress.total || 0} chunks embedded`;
+                            
+                            if (progress.stage === 'completed') {
+                                clearInterval(progressInterval);
+                                setTimeout(() => {
+                                    progressDiv.style.display = 'none';
+                                }, 2000);
+                            }
+                        } else if (progressResponse.status === 404) {
+                            // Progress expired or completed
+                            clearInterval(progressInterval);
+                            progressDiv.style.display = 'none';
+                        }
+                    } catch (err) {
+                        console.error('Error polling progress:', err);
+                    }
+                }, 500); // Poll every 500ms
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok || response.status === 201) {
+                    uploadId = data.upload_id;
+                    
+                    // Start polling for progress if upload_id is available
+                    if (uploadId) {
+                        pollProgress(uploadId);
+                        
+                        // Also check periodically if upload is complete
+                        const completionCheck = setInterval(async () => {
+                            try {
+                                const progressResponse = await fetch(`${API_BASE}/upload/${uploadId}/progress`);
+                                if (progressResponse.ok) {
+                                    const progress = await progressResponse.json();
+                                    if (progress.stage === 'completed') {
+                                        clearInterval(progressInterval);
+                                        clearInterval(completionCheck);
+                                        document.getElementById('uploadMessage').innerHTML = `<p style="color: green;">✅ Uploaded and indexed successfully! Doc ID: ${data.doc_id}</p>`;
+                                        progressDiv.style.display = 'none';
+                                        loadDocuments();
+                                        setTimeout(() => {
+                                            closeUploadModal();
+                                            loadDocuments();
+                                            if (currentChatId) {
+                                                addMessage('assistant', `📄 Document "${data.filename}" uploaded successfully! You can now ask questions about it.`);
+                                            }
+                                        }, 1500);
+                                    }
+                                } else if (progressResponse.status === 404) {
+                                    // Progress expired, assume completed
+                                    clearInterval(progressInterval);
+                                    clearInterval(completionCheck);
+                                    document.getElementById('uploadMessage').innerHTML = `<p style="color: green;">✅ Uploaded successfully! Doc ID: ${data.doc_id}</p>`;
+                                    progressDiv.style.display = 'none';
+                                    loadDocuments();
+                                    setTimeout(() => {
+                                        closeUploadModal();
+                                        loadDocuments();
+                                        if (currentChatId) {
+                                            addMessage('assistant', `📄 Document "${data.filename}" uploaded successfully! You can now ask questions about it.`);
+                                        }
+                                    }, 1500);
+                                }
+                            } catch (err) {
+                                console.error('Error checking completion:', err);
+                            }
+                        }, 1000);
+                    } else {
+                        // No upload_id, just show success
+                        document.getElementById('uploadMessage').innerHTML = `<p style="color: green;">✅ Uploaded successfully! Doc ID: ${data.doc_id}</p>`;
+                        progressDiv.style.display = 'none';
+                        loadDocuments();
+                        setTimeout(() => {
+                            closeUploadModal();
+                            loadDocuments();
+                            if (currentChatId) {
+                                addMessage('assistant', `📄 Document "${data.filename}" uploaded successfully! You can now ask questions about it.`);
+                            }
+                        }, 1500);
+                    }
+                } else {
+                    clearInterval(progressInterval);
+                    progressDiv.style.display = 'none';
+                    document.getElementById('uploadMessage').innerHTML = `<p style="color: red;">❌ Error: ${data.detail || data.message || 'Upload failed'}</p>`;
+                }
+            } catch (error) {
+                clearInterval(progressInterval);
+                progressDiv.style.display = 'none';
+                document.getElementById('uploadMessage').innerHTML = `<p style="color: red;">❌ Error: ${error.message}</p>`;
+            }
+        });
+        
+        // Close modal on outside click
+        document.getElementById('uploadModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeUploadModal();
+            }
+        });
+    </script>
+</body>
+</html>

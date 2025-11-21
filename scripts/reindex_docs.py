@@ -10,11 +10,11 @@ Usage:
   python scripts/reindex_docs.py <doc_id1> <doc_id2>
 
 Notes:
-  - This script will attempt to delete vectors from the Pinecone index for each
+  - This script will attempt to delete vectors from the FAISS index for each
     document by filtering on `doc_id` and then re-run `ingest_pdf` using the
     stored `file_path` in your document store. It preserves the same `doc_id` so
     downstream references remain stable.
-  - Deleting vectors is irreversible in the index; be careful when running.
+  - Deleting vectors rebuilds the FAISS index; be careful when running.
 """
 import argparse
 import sys
@@ -29,18 +29,7 @@ if FIN_SIGHT_DIR not in sys.path:
 from utils.logger import logger
 from utils.document_store import list_documents, get_document
 from rag_pipeline.ingest import ingest_pdf
-from rag_pipeline.embed_store import get_pinecone_index
-
-
-def delete_vectors_for_doc(doc_id: str) -> None:
-    """Delete vectors in Pinecone that have metadata doc_id == doc_id."""
-    try:
-        index = get_pinecone_index()
-        # Pinecone SDK supports delete by metadata filter
-        index.delete(filter={"doc_id": doc_id})
-        logger.info(f"Deleted vectors for doc_id={doc_id}")
-    except Exception as e:
-        logger.warning(f"Failed to delete vectors for {doc_id}: {e}")
+from rag_pipeline.embed_store import delete_vectors_by_doc_id
 
 
 def reingest_doc(doc_id: str) -> None:
@@ -58,10 +47,10 @@ def reingest_doc(doc_id: str) -> None:
     logger.info(f"Re-indexing doc_id={doc_id} file={file_path}")
 
     # Delete existing vectors for this doc to avoid duplicates
-    delete_vectors_for_doc(doc_id)
+    delete_vectors_by_doc_id(doc_id)
 
-    # Small pause to ensure deletion propagates (Pinecone may be eventual-consistent)
-    time.sleep(1)
+    # Small pause to ensure deletion completes
+    time.sleep(0.5)
 
     # Re-ingest using same doc_id
     try:

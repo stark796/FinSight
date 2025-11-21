@@ -519,5 +519,5 @@ elif page == "Manage Documents":
 
 # Footer
 st.divider()
-st.caption("FinSight v2.0.0 | Powered by Google Gemini & Pinecone")
+st.caption("FinSight v2.0.0 | Powered by Google Gemini & FAISS")
 

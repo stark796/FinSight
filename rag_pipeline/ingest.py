@@ -102,9 +102,10 @@ def ingest_pdf(
     doc_id: str | None = None,
     company: str | None = None,
     year: int | None = None,
+    upload_id: str | None = None,
 ) -> str:
     """
-    Parse PDF → chunk → embed with Gemini → store in Pinecone.
+    Parse PDF → chunk → embed with Gemini → store in FAISS.
 
     Args:
         file_path: Path to PDF file
@@ -195,17 +196,30 @@ def ingest_pdf(
 
         logger.info(f"Extracted {len(all_chunks)} text chunks from PDF")
 
-        # Embed and store into Pinecone
-        embeddings = embed_chunks(all_chunks)
-        store_chunks(all_chunks, embeddings)
+        # Report parsing complete, starting embedding
+        if upload_id:
+            from utils.progress import set_progress
+            set_progress(upload_id, len(all_chunks), 0, "parsing_complete")
+
+        # Embed and store into FAISS
+        embeddings = embed_chunks(all_chunks, upload_id)
+        store_chunks(all_chunks, embeddings, upload_id)
         
         # Update document store with chunk count
-        from utils.document_store import update_chunk_count
+        from utils.document_store import update_chunk_count, set_indexing_status
         update_chunk_count(doc_id, len(all_chunks))
+        set_indexing_status(doc_id, "completed")
 
         logger.info(f"Completed ingestion for doc_id={doc_id}")
         return doc_id
         
     except Exception as e:
         logger.error(f"Error during PDF ingestion: {e}", exc_info=True)
+        # Mark as failed if doc_id exists
+        if doc_id:
+            try:
+                from utils.document_store import set_indexing_status
+                set_indexing_status(doc_id, "failed")
+            except Exception:
+                pass
         raise

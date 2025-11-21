@@ -1,50 +1,27 @@
 # retrieve.py
 
-from typing import List, Dict, Any, Optional
-
+from typing import Dict, Any, List, Optional
+import numpy as np
 import google.generativeai as genai
-from pinecone import Pinecone
+import faiss
 
-from utils.config import (
-    GEMINI_API_KEY,
-    EMBED_MODEL,
-    PINECONE_API_KEY,
-    PINECONE_INDEX,
-)
+from utils.config import GEMINI_API_KEY, EMBED_MODEL
 from utils.logger import logger
 from utils.retry import retry_with_backoff
+from rag_pipeline.embed_store import get_faiss_index, get_faiss_metadata
 
 # Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Lazy Pinecone connection - only connect when needed
-_pc = None
-_index = None
-
-def get_pinecone_index():
-    """Get Pinecone index, creating connection if needed."""
-    global _pc, _index
-    if _index is None:
-        _pc = Pinecone(api_key=PINECONE_API_KEY)
-        _index = _pc.Index(PINECONE_INDEX)
-    return _index
-
 
 @retry_with_backoff(max_retries=3, exceptions=(Exception,))
 def _embed_query(query: str) -> List[float]:
-    """Embed a query with retry logic."""
+    """Embed a query string using Gemini."""
     resp = genai.embed_content(
         model=EMBED_MODEL,
         content=query,
     )
     return resp["embedding"]
-
-
-@retry_with_backoff(max_retries=3, exceptions=(Exception,))
-def _query_pinecone(query_kwargs: Dict[str, Any]) -> Any:
-    """Query Pinecone with retry logic."""
-    index = get_pinecone_index()
-    return index.query(**query_kwargs)
 
 
 def retrieve(
@@ -53,7 +30,7 @@ def retrieve(
     filters: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve top_k most relevant chunks from Pinecone for a given query.
+    Retrieve top_k most relevant chunks from FAISS for a given query.
 
     Args:
         query: user question.
@@ -66,7 +43,12 @@ def retrieve(
           {
             "text": str,
             "metadata": dict,
-            "score": float
+            "score": float,
+            "rows": list (if table),
+            "chunk_type": str,
+            "page": int,
+            "source_file": str,
+            "snippet": str
           }
     """
     logger.info(f"Retrieving top {top_k} chunks for query: {query[:100]}...")
@@ -76,62 +58,75 @@ def retrieve(
         logger.warning(f"top_k={top_k} is too low, using minimum of 3")
         top_k = 3
     
+    # Get FAISS index and metadata
+    index = get_faiss_index()
+    metadata_list = get_faiss_metadata()
+    
+    if index.ntotal == 0:
+        logger.warning("FAISS index is empty")
+        return []
+    
     try:
         # 1) Embed query with Gemini
         q_emb = _embed_query(query)
-
-        # 2) Build Pinecone query params
-        # Retrieve more chunks than requested to filter by score later
-        query_kwargs: Dict[str, Any] = {
-            "vector": q_emb,
-            "top_k": min(top_k * 2, 50),  # Get more candidates, filter by score
-            "include_metadata": True,
-        }
-        if filters:
-            query_kwargs["filter"] = filters
-            logger.debug(f"Using filters: {filters}")
-
-        # 3) Query Pinecone
-        res = _query_pinecone(query_kwargs)
-
-        # Support both SDK styles: res.matches or res["matches"]
-        matches_raw = getattr(res, "matches", None)
-        if matches_raw is None:
-            matches_raw = res.get("matches", [])
-
+        
+        # 2) Convert query to numpy array
+        query_vector = np.array([q_emb], dtype=np.float32)
+        
+        # 3) If filters are provided, we need to search more results and filter
+        # then return top_k from filtered results
+        search_k = top_k * 10 if filters else top_k * 2  # Search more if filtering
+        
+        # 4) Search in FAISS
+        distances, indices = index.search(query_vector, min(search_k, index.ntotal))
+        
+        # 5) Get metadata for retrieved indices and apply filters
         results: List[Dict[str, Any]] = []
-
-        for m in matches_raw:
-            # Handle object-style or dict-style
-            if hasattr(m, "metadata"):
-                meta = m.metadata
-                score = m.score
-            else:
-                meta = m.get("metadata", {})
-                score = m.get("score")
-
+        
+        for dist, idx in zip(distances[0], indices[0]):
+            if idx < 0:  # FAISS returns -1 for invalid indices
+                continue
+            
+            if idx >= len(metadata_list):
+                logger.warning(f"Index {idx} out of range for metadata list")
+                continue
+            
+            meta = metadata_list[idx].copy()
+            
+            # Apply filters if provided
+            if filters:
+                match = True
+                for key, value in filters.items():
+                    if meta.get(key) != value:
+                        match = False
+                        break
+                if not match:
+                    continue
+            
+            # Convert L2 distance to similarity score (lower distance = higher similarity)
+            # Using inverse distance as score (with a small epsilon to avoid division by zero)
+            score = 1.0 / (1.0 + dist)
+            
             # Filter out very low relevance scores (below 0.3)
-            # This helps ensure we get meaningful chunks
-            if score and score < 0.3:
+            if score < 0.3:
                 logger.debug(f"Skipping chunk with low score: {score:.3f}")
                 continue
-
-            results.append(
-                {
-                    "text": meta.get("text", ""),
-                    "metadata": meta,
-                    "score": score,
-                    # expose helpful fields at top-level for UI convenience
-                    "rows": meta.get("rows"),
-                    "chunk_type": meta.get("chunk_type"),
-                    "page": meta.get("page"),
-                    "source_file": meta.get("source_file"),
-                    "snippet": (meta.get("text", "")[:1000] if meta.get("text") else ""),
-                }
-            )
-
-        # Take top_k results after filtering
-        results = results[:top_k]
+            
+            results.append({
+                "text": meta.get("text", ""),
+                "metadata": {k: v for k, v in meta.items() if k != "text"},
+                "score": float(score),
+                # expose helpful fields at top-level for UI convenience
+                "rows": meta.get("rows"),
+                "chunk_type": meta.get("chunk_type"),
+                "page": meta.get("page"),
+                "source_file": meta.get("source_file"),
+                "snippet": (meta.get("text", "")[:1000] if meta.get("text") else ""),
+            })
+            
+            # Stop if we have enough results
+            if len(results) >= top_k:
+                break
         
         logger.info(f"Retrieved {len(results)} chunks (after filtering)")
         if results and results[0].get("score"):

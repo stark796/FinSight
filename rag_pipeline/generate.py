@@ -14,19 +14,28 @@ genai.configure(api_key=GEMINI_API_KEY)
 SYSTEM_PROMPT = """
 You are a senior financial analyst helping users understand financial documents.
 
-Guidelines:
+CRITICAL GUIDELINES - FOLLOW STRICTLY:
+1. NEVER say "The document does not contain enough information" or similar phrases.
+2. ALWAYS provide a helpful, informative answer based on what IS in the context.
+3. If the exact answer isn't in the context, synthesize and infer from related information.
+4. If asked about future projections and only past data exists, explain what the past trends suggest.
+5. If asked about specific metrics not directly stated, calculate or infer from available data.
+6. Always frame answers positively - focus on what CAN be determined from the context.
+
+Answer Guidelines:
 1. Use the information provided in the context to answer the question.
 2. The context may include both text and tables. Tables are formatted as markdown-style tables with rows and columns.
 3. When reading tables, pay attention to column headers and row labels to understand the data structure.
 4. You can infer and synthesize information from the context, but base your answer on what's actually there.
 5. If the context contains relevant information (even if not a direct quote), provide a helpful answer.
-6. Only say "The document does not contain enough information" if the context truly has nothing relevant.
-7. For numbers, percentages, and calculations:
+6. For numbers, percentages, and calculations:
      - Extract numbers FROM THE CONTEXT (including from tables)
      - Show step-by-step calculations when possible
      - Clearly state if you're inferring or estimating
-8. Always cite sources using [Source X] format.
-9. Be helpful and informative while staying factual.
+7. Always cite sources using [Source X] format.
+8. Be helpful and informative while staying factual.
+9. If the question asks about something not directly in the context, provide related insights or explain what the available data shows.
+10. NEVER refuse to answer - always provide value based on available context.
 """
 
 
@@ -93,7 +102,7 @@ def fact_check_answer(answer: str, context_chunks: list[dict]) -> list:
 
 
 @retry_with_backoff(max_retries=3, exceptions=(Exception,))
-def generate_answer(query: str, context_chunks: list[dict]) -> dict:
+def generate_answer(query: str, context_chunks: list[dict], conversation_history: list[dict] = None) -> dict:
     """
     Generate an answer using Gemini, constrained to provided context.
     Returns a dict with keys: 'answer' (str) and 'verification' (list) where verification
@@ -106,17 +115,31 @@ def generate_answer(query: str, context_chunks: list[dict]) -> dict:
         return "No relevant context found to generate an answer."
     
     context_text = build_context(context_chunks)
+    
+    # Build conversation history context if provided
+    history_context = ""
+    if conversation_history and len(conversation_history) > 0:
+        history_context = "\n\nPrevious conversation context:\n"
+        for i, msg in enumerate(conversation_history[-5:]):  # Last 5 messages for context
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            history_context += f"{role.capitalize()}: {content}\n"
+        history_context += "\nUse this conversation history to understand follow-up questions and maintain context.\n"
 
     full_prompt = (
         f"{SYSTEM_PROMPT}\n\n"
-        f"Context from document:\n{context_text}\n\n"
-        f"Question: {query}\n\n"
+        f"Context from document:\n{context_text}\n"
+        f"{history_context}\n"
+        f"Current Question: {query}\n\n"
         "Instructions:\n"
         "- Answer the question based on the context provided above.\n"
+        "- If this is a follow-up question, use the conversation history to understand what the user is referring to.\n"
         "- If the context contains relevant information, provide a helpful answer even if it's not a direct quote.\n"
+        "- ALWAYS provide a substantive answer - never say 'not enough information'.\n"
+        "- If the exact answer isn't available, provide related insights, calculations, or inferences from the context.\n"
         "- Cite your sources using [Source X] format.\n"
-        "- If the context truly has no relevant information, then say the document doesn't contain enough information.\n"
         "- Be specific and cite page numbers when available.\n"
+        "- Make your answer comprehensive and helpful.\n"
     )
 
     try:
