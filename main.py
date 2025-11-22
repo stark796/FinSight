@@ -62,6 +62,7 @@ class UploadResponse(BaseModel):
     year: int | None = None
     message: str
     file_size: int | None = None
+    upload_id: str | None = None
 
 
 class AskRequest(BaseModel):
@@ -127,6 +128,7 @@ class DocumentInfo(BaseModel):
     uploaded_at: str
     chunk_count: int
     file_path: str | None = None
+    indexing_status: str | None = None
 
 
 class DocumentListResponse(BaseModel):
@@ -195,46 +197,34 @@ async def upload_pdf(
     save_path = None
     
     try:
-        # Validate file
+        # Validate file extension and presence
         is_valid, error_msg = validate_file(file)
         if not is_valid:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg,
-            )
-        
-        # Check file size
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
+
+        # Validate size
         file_size = await get_file_size(file)
         if file_size > MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=f"File size ({file_size / 1024 / 1024:.2f} MB) exceeds maximum allowed size ({MAX_FILE_SIZE / 1024 / 1024} MB)",
             )
-        
         if file_size == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File is empty",
-            )
-        
-        # Generate unique filename and save
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty")
+
         unique_filename = generate_unique_filename(file.filename)
         save_path = UPLOAD_DIR / unique_filename
-        
-        logger.info(f"Uploading file: {file.filename} ({file_size / 1024:.2f} KB)")
-        
+        logger.info(f"Saving upload to {save_path}")
         with open(save_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
-        
-        # Generate doc_id and upload_id before ingestion
+
         doc_id = str(uuid.uuid4())
         upload_id = f"upload-{doc_id}"
-        
-        # Initialize progress tracking
+
+        # Initialize progress as received
         from utils.progress import set_progress
-        set_progress(upload_id, 100, 0, "parsing")  # Initial state
-        
-        # Register document before ingestion (status: indexing)
+        set_progress(upload_id, 1, 0, "received")
+
         register_document(
             doc_id=doc_id,
             filename=file.filename,
@@ -243,69 +233,55 @@ async def upload_pdf(
             year=year,
         )
         set_indexing_status(doc_id, "indexing")
-        
-        # Run ingestion synchronously in executor to allow progress tracking
-        # but wait for completion before returning
-        logger.info(f"Starting ingestion for doc_id={doc_id}")
-        try:
-            # Run in thread pool to avoid blocking the event loop
-            # This allows progress tracking while still waiting for completion
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                ingest_pdf,
-                str(save_path),
-                doc_id,
-                company,
-                year,
-                upload_id,
-            )
-            
-            # ingest_pdf will set status to "completed" or "failed"
-            logger.info(f"Successfully uploaded and indexed: {doc_id}")
-            
-            return UploadResponse(
-                doc_id=doc_id,
-                filename=file.filename,
-                company=company,
-                year=year,
-                message="File uploaded and indexed successfully.",
-                file_size=file_size,
-                upload_id=upload_id,
-            )
-        except Exception as ingest_error:
-            # ingest_pdf will have already set status to "failed" in its exception handler
-            logger.error(f"Error during ingestion: {ingest_error}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error indexing document: {str(ingest_error)}",
-            )
-        
+
+        async def run_ingest():
+            try:
+                logger.info(f"Background ingestion start doc_id={doc_id}")
+                ingest_pdf(
+                    str(save_path),
+                    doc_id,
+                    company,
+                    year,
+                    upload_id,
+                )
+                # ingest_pdf sets indexing_status and progress stages
+                logger.info(f"Background ingestion complete doc_id={doc_id}")
+            except Exception as ingest_error:
+                logger.error(f"Background ingestion failed doc_id={doc_id}: {ingest_error}", exc_info=True)
+                try:
+                    set_indexing_status(doc_id, "failed")
+                except Exception:
+                    pass
+                set_progress(upload_id, 1, 0, "failed")
+
+        # Fire-and-forget
+        asyncio.create_task(run_ingest())
+
+        return UploadResponse(
+            doc_id=doc_id,
+            filename=file.filename,
+            company=company,
+            year=year,
+            message="Upload accepted. Indexing in background.",
+            file_size=file_size,
+            upload_id=upload_id,
+        )
+
     except HTTPException:
-        # Re-raise HTTP exceptions
         raise
     except Exception as e:
-        logger.error(f"Error in /upload: {e}", exc_info=True)
-        
-        # Clean up file if it was saved
+        logger.error(f"Unexpected error in /upload: {e}", exc_info=True)
         if save_path and save_path.exists():
             try:
                 save_path.unlink()
-                logger.info(f"Cleaned up file: {save_path}")
-            except Exception as cleanup_error:
-                logger.error(f"Error cleaning up file: {cleanup_error}")
-        
-        # Remove from document store if registered
+            except Exception:
+                pass
         if doc_id:
             try:
                 delete_document(doc_id)
             except Exception:
                 pass
-        
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server error while uploading/indexing the file. Please try again.",
-        )
+        raise HTTPException(status_code=500, detail="Server error during upload")
 
 
 @app.post("/ask", response_model=AskResponse)
@@ -538,6 +514,7 @@ async def list_docs():
                 uploaded_at=doc.get("uploaded_at", ""),
                 chunk_count=doc.get("chunk_count", 0),
                 file_path=None,  # Don't expose file paths
+                indexing_status=doc.get("indexing_status"),
             )
             for doc in docs
         ]
@@ -573,6 +550,7 @@ async def get_doc(doc_id: str):
             uploaded_at=doc.get("uploaded_at", ""),
             chunk_count=doc.get("chunk_count", 0),
             file_path=None,  # Don't expose file paths
+            indexing_status=doc.get("indexing_status"),
         )
     except HTTPException:
         raise
