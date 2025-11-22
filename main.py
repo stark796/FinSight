@@ -3,23 +3,27 @@
 import os
 import shutil
 import uuid
+import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from rag_pipeline.retrieve import retrieve
 from rag_pipeline.generate import generate_answer
 from rag_pipeline.ingest import ingest_pdf
+from rag_pipeline.embed_store import delete_vectors_by_doc_id
 from utils.logger import logger
 from utils.document_store import (
     register_document,
     get_document,
     list_documents,
     delete_document,
+    set_indexing_status,
+    is_document_indexed,
 )
 
 # -----------------------------
@@ -27,7 +31,7 @@ from utils.document_store import (
 # -----------------------------
 app = FastAPI(
     title="FinSight - RAG Analyst Backend",
-    description="Upload PDFs and ask questions using Gemini + Pinecone",
+    description="Upload PDFs and ask questions using Gemini + FAISS",
     version="2.0.0",
 )
 
@@ -58,6 +62,7 @@ class UploadResponse(BaseModel):
     year: int | None = None
     message: str
     file_size: int | None = None
+    upload_id: str | None = None
 
 
 class AskRequest(BaseModel):
@@ -69,6 +74,7 @@ class AskRequest(BaseModel):
     company: str | None = None
     companies: List[str] | None = None
     year: int | None = None
+    conversation_history: List[Dict[str, str]] | None = Field(None, description="Previous conversation messages for context")
 
     @field_validator("question")
     @classmethod
@@ -77,16 +83,14 @@ class AskRequest(BaseModel):
             raise ValueError("Question cannot be empty")
         return v.strip()
 
-    @field_validator("doc_id", "doc_ids", "company", "companies")
-    @classmethod
-    def validate_docs(cls, v, info):
-        # Ensure at least one of doc_id/doc_ids or company/companies is provided
-        values = info.data
-        has_doc = bool(values.get("doc_id") or values.get("doc_ids"))
-        has_company = bool(values.get("company") or values.get("companies"))
+    @model_validator(mode="after")
+    def validate_has_doc_or_company(self):
+        """Ensure at least one of doc_id/doc_ids or company/companies is provided."""
+        has_doc = bool(self.doc_id or self.doc_ids)
+        has_company = bool(self.company or self.companies)
         if not (has_doc or has_company):
             raise ValueError("Either `doc_id`/`doc_ids` or `company`/`companies` must be provided")
-        return v
+        return self
 
 
 class Source(BaseModel):
@@ -124,6 +128,7 @@ class DocumentInfo(BaseModel):
     uploaded_at: str
     chunk_count: int
     file_path: str | None = None
+    indexing_status: str | None = None
 
 
 class DocumentListResponse(BaseModel):
@@ -184,7 +189,7 @@ async def upload_pdf(
     Process:
       1) Validate file (type, size)
       2) Save the file with unique name
-      3) Parse + chunk + embed + store in Pinecone
+      3) Parse + chunk + embed + store in FAISS
       4) Register document in metadata store
       5) Return doc_id for later queries
     """
@@ -192,41 +197,34 @@ async def upload_pdf(
     save_path = None
     
     try:
-        # Validate file
+        # Validate file extension and presence
         is_valid, error_msg = validate_file(file)
         if not is_valid:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg,
-            )
-        
-        # Check file size
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
+
+        # Validate size
         file_size = await get_file_size(file)
         if file_size > MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=f"File size ({file_size / 1024 / 1024:.2f} MB) exceeds maximum allowed size ({MAX_FILE_SIZE / 1024 / 1024} MB)",
             )
-        
         if file_size == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File is empty",
-            )
-        
-        # Generate unique filename and save
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty")
+
         unique_filename = generate_unique_filename(file.filename)
         save_path = UPLOAD_DIR / unique_filename
-        
-        logger.info(f"Uploading file: {file.filename} ({file_size / 1024:.2f} KB)")
-        
+        logger.info(f"Saving upload to {save_path}")
         with open(save_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
-        
-        # Generate doc_id before ingestion
+
         doc_id = str(uuid.uuid4())
-        
-        # Register document before ingestion
+        upload_id = f"upload-{doc_id}"
+
+        # Initialize progress as received
+        from utils.progress import set_progress
+        set_progress(upload_id, 1, 0, "received")
+
         register_document(
             doc_id=doc_id,
             filename=file.filename,
@@ -234,52 +232,56 @@ async def upload_pdf(
             company=company,
             year=year,
         )
-        
-        # Ingest into RAG index
-        logger.info(f"Starting ingestion for doc_id={doc_id}")
-        ingest_pdf(
-            str(save_path),
-            doc_id=doc_id,
-            company=company,
-            year=year,
-        )
-        
-        logger.info(f"Successfully uploaded and indexed: {doc_id}")
-        
+        set_indexing_status(doc_id, "indexing")
+
+        async def run_ingest():
+            try:
+                logger.info(f"Background ingestion start doc_id={doc_id}")
+                ingest_pdf(
+                    str(save_path),
+                    doc_id,
+                    company,
+                    year,
+                    upload_id,
+                )
+                # ingest_pdf sets indexing_status and progress stages
+                logger.info(f"Background ingestion complete doc_id={doc_id}")
+            except Exception as ingest_error:
+                logger.error(f"Background ingestion failed doc_id={doc_id}: {ingest_error}", exc_info=True)
+                try:
+                    set_indexing_status(doc_id, "failed")
+                except Exception:
+                    pass
+                set_progress(upload_id, 1, 0, "failed")
+
+        # Fire-and-forget
+        asyncio.create_task(run_ingest())
+
         return UploadResponse(
             doc_id=doc_id,
             filename=file.filename,
             company=company,
             year=year,
-            message="File uploaded and indexed successfully.",
+            message="Upload accepted. Indexing in background.",
             file_size=file_size,
+            upload_id=upload_id,
         )
-        
+
     except HTTPException:
-        # Re-raise HTTP exceptions
         raise
     except Exception as e:
-        logger.error(f"Error in /upload: {e}", exc_info=True)
-        
-        # Clean up file if it was saved
+        logger.error(f"Unexpected error in /upload: {e}", exc_info=True)
         if save_path and save_path.exists():
             try:
                 save_path.unlink()
-                logger.info(f"Cleaned up file: {save_path}")
-            except Exception as cleanup_error:
-                logger.error(f"Error cleaning up file: {cleanup_error}")
-        
-        # Remove from document store if registered
+            except Exception:
+                pass
         if doc_id:
             try:
                 delete_document(doc_id)
             except Exception:
                 pass
-        
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server error while uploading/indexing the file. Please try again.",
-        )
+        raise HTTPException(status_code=500, detail="Server error during upload")
 
 
 @app.post("/ask", response_model=AskResponse)
@@ -320,10 +322,21 @@ async def ask(req: AskRequest):
         if req.doc_ids or req.doc_id:
             doc_ids = req.doc_ids if req.doc_ids else [req.doc_id]
             valid_docs = []
+            not_indexed_docs = []
             for did in doc_ids:
                 d = get_document(did)
                 if d:
-                    valid_docs.append(did)
+                    if is_document_indexed(did):
+                        valid_docs.append(did)
+                    else:
+                        not_indexed_docs.append(did)
+
+            if not_indexed_docs:
+                doc_names = [get_document(did).get("filename", did) for did in not_indexed_docs if get_document(did)]
+                raise HTTPException(
+                    status_code=status.HTTP_423_LOCKED,
+                    detail=f"Document(s) still being indexed: {', '.join(doc_names)}. Please wait for indexing to complete.",
+                )
 
             if not valid_docs:
                 raise HTTPException(
@@ -361,7 +374,7 @@ async def ask(req: AskRequest):
             aggregated_ctx.sort(key=lambda x: (x.get("score") or 0), reverse=True)
             aggregated_ctx = aggregated_ctx[: req.top_k]
 
-            gen_result = generate_answer(req.question, aggregated_ctx)
+            gen_result = generate_answer(req.question, aggregated_ctx, req.conversation_history)
             answer_text = gen_result.get("answer") if isinstance(gen_result, dict) else str(gen_result)
             verification = gen_result.get("verification") if isinstance(gen_result, dict) else []
             sources = build_sources_from_ctx(aggregated_ctx)
@@ -402,7 +415,7 @@ async def ask(req: AskRequest):
                 # save per-company context for combined summary
                 company_ctx_map[comp] = ctx
 
-                gen_result = generate_answer(req.question, ctx)
+                gen_result = generate_answer(req.question, ctx, req.conversation_history)
                 answer_text = gen_result.get("answer") if isinstance(gen_result, dict) else str(gen_result)
                 verification = gen_result.get("verification") if isinstance(gen_result, dict) else []
                 sources = build_sources_from_ctx(ctx)
@@ -463,7 +476,7 @@ async def ask(req: AskRequest):
             ctx.sort(key=lambda x: (x.get("score") or 0), reverse=True)
             ctx = ctx[: req.top_k]
 
-            gen_result = generate_answer(req.question, ctx)
+            gen_result = generate_answer(req.question, ctx, req.conversation_history)
             answer_text = gen_result.get("answer") if isinstance(gen_result, dict) else str(gen_result)
             verification = gen_result.get("verification") if isinstance(gen_result, dict) else []
             sources = build_sources_from_ctx(ctx)
@@ -501,6 +514,7 @@ async def list_docs():
                 uploaded_at=doc.get("uploaded_at", ""),
                 chunk_count=doc.get("chunk_count", 0),
                 file_path=None,  # Don't expose file paths
+                indexing_status=doc.get("indexing_status"),
             )
             for doc in docs
         ]
@@ -536,6 +550,7 @@ async def get_doc(doc_id: str):
             uploaded_at=doc.get("uploaded_at", ""),
             chunk_count=doc.get("chunk_count", 0),
             file_path=None,  # Don't expose file paths
+            indexing_status=doc.get("indexing_status"),
         )
     except HTTPException:
         raise
@@ -552,8 +567,7 @@ async def delete_doc(doc_id: str):
     """
     Delete a document and its associated data.
     
-    Note: This removes metadata and the file, but does NOT remove
-    vectors from Pinecone. Consider implementing a cleanup job for that.
+    Note: This removes metadata, the file, and vectors from FAISS.
     """
     try:
         deleted = delete_document(doc_id)
@@ -563,10 +577,17 @@ async def delete_doc(doc_id: str):
                 detail=f"Document with doc_id '{doc_id}' not found",
             )
         
+        # Delete vectors from FAISS
+        try:
+            delete_vectors_by_doc_id(doc_id)
+            logger.info(f"Deleted vectors from FAISS for doc_id: {doc_id}")
+        except Exception as e:
+            logger.warning(f"Error deleting vectors from FAISS: {e}")
+        
         logger.info(f"Deleted document: {doc_id}")
         return DeleteResponse(
             doc_id=doc_id,
-            message="Document deleted successfully. Note: Vectors in Pinecone are not removed.",
+            message="Document deleted successfully. Vectors removed from FAISS.",
             deleted=True,
         )
     except HTTPException:
@@ -587,3 +608,26 @@ async def health():
         "message": "FinSight RAG Analyst Backend Running",
         "version": "2.0.0",
     }
+
+
+@app.get("/upload/{upload_id}/progress")
+async def get_upload_progress(upload_id: str):
+    """
+    Get progress for an upload operation.
+    
+    Returns progress information including:
+    - total: Total number of chunks to embed
+    - completed: Number of chunks completed
+    - percentage: Completion percentage
+    - stage: Current stage (parsing, embedding, storing, completed)
+    """
+    from utils.progress import get_progress
+    
+    progress = get_progress(upload_id)
+    if not progress:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Upload progress not found. It may have completed or expired.",
+        )
+    
+    return progress

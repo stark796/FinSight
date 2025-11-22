@@ -1,12 +1,12 @@
 # FinSight
 
-A RAG system for analyzing financial documents. Upload PDFs, ask questions, get answers with citations. Uses Google Gemini for embeddings and generation, Pinecone for vector storage.
+A RAG system for analyzing financial documents. Upload PDFs, ask questions, get answers with citations. Uses Google Gemini for embeddings and generation, FAISS for local vector storage.
 
 ## What It Does
 
 You can upload financial PDFs (like annual reports, earnings statements, etc.) and then ask questions about them. The system will:
 - Parse and chunk the PDFs intelligently
-- Store embeddings in Pinecone for fast semantic search
+- Store embeddings in FAISS for fast local semantic search
 - Answer your questions using the document content
 - Show you where the answers came from (page numbers, snippets)
 
@@ -14,8 +14,7 @@ You can upload financial PDFs (like annual reports, earnings statements, etc.) a
 
 - Python 3.9 or higher
 - A Google Gemini API key (get one from Google AI Studio)
-- A Pinecone account and API key
-- A Pinecone index (create one in your Pinecone dashboard)
+- FAISS will be installed automatically (no API key needed - it's local!)
 
 ## Setup
 
@@ -29,9 +28,13 @@ Create a `.env` file in the project root with your API keys:
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key_here
-PINECONE_API_KEY=your_pinecone_api_key_here
-PINECONE_INDEX=your_pinecone_index_name
 ENV=dev
+```
+
+Optional: You can customize FAISS storage paths:
+```env
+FAISS_INDEX_PATH=data/faiss_index.bin
+FAISS_METADATA_PATH=data/faiss_metadata.pkl
 ```
 
 The app will create these directories automatically when you run it:
@@ -155,7 +158,7 @@ Get details about a specific document.
 
 DELETE `/documents/{doc_id}`
 
-Delete a document and its metadata. Note: This doesn't remove the vectors from Pinecone - you'd need to implement a cleanup job for that if you want full deletion.
+Delete a document and its metadata. This also removes the vectors from FAISS automatically.
 
 ### Health Check
 
@@ -171,7 +174,7 @@ The code is organized like this:
 main.py                    # FastAPI app and endpoints
 ├── rag_pipeline/
 │   ├── ingest.py         # PDF parsing and chunking
-│   ├── embed_store.py    # Creating embeddings and storing in Pinecone
+│   ├── embed_store.py    # Creating embeddings and storing in FAISS
 │   ├── retrieve.py       # Searching for relevant chunks
 │   └── generate.py       # Generating answers with Gemini
 └── utils/
@@ -213,10 +216,10 @@ You can tweak settings in `utils/config.py`:
 
 **Import errors**: Make sure you're running from the project root directory and all dependencies are installed.
 
-**Pinecone issues**: 
-- Double-check your API key and index name in `.env`
-- Make sure the index exists in your Pinecone dashboard
-- The index dimension should match your embedding model (768 for text-embedding-004)
+**FAISS issues**: 
+- Make sure the `data/` directory exists and is writable
+- If the index gets corrupted, delete `data/faiss_index.bin` and `data/faiss_metadata.pkl` to start fresh
+- The index dimension is automatically set to 768 for text-embedding-004 model
 
 **Gemini API errors**:
 - Verify your API key is correct
@@ -226,7 +229,7 @@ You can tweak settings in `utils/config.py`:
 ## Things That Could Be Added
 
 - Async embedding operations to speed things up
-- Actually deleting vectors from Pinecone when a document is deleted
+- Vector deletion is now implemented in FAISS
 - Rate limiting
 - Authentication/authorization
 - Batch uploads

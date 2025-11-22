@@ -23,13 +23,12 @@ EMBED_MODEL = "models/text-embedding-004"
 GENERATION_MODEL = "models/gemini-2.5-flash"
 
 # ----------------------------
-# PINECONE
+# FAISS
 # ----------------------------
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-if PINECONE_API_KEY is None:
-    raise ValueError("Missing PINECONE_API_KEY in environment variables")
-
-PINECONE_INDEX = os.getenv("PINECONE_INDEX", "<your-index-name>")
+# FAISS index and metadata storage paths
+FAISS_INDEX_PATH = os.getenv("FAISS_INDEX_PATH", "data/faiss_index.bin")
+FAISS_METADATA_PATH = os.getenv("FAISS_METADATA_PATH", "data/faiss_metadata.pkl")
+EMBEDDING_DIM = 768  # Dimension for text-embedding-004 model
 
 # ----------------------------
 # Debug / Optional Settings

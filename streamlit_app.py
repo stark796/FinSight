@@ -3,7 +3,7 @@
 import streamlit as st
 import requests
 import json
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import time
 import pandas as pd
 import re
@@ -144,6 +144,22 @@ def ask_question(question: str, doc_id: Optional[str] = None, doc_ids: Optional[
 
 
     return response.json()
+
+
+def annotate_answer_with_citations(answer: str, sources: List[Dict[str, Any]]) -> str:
+    """Append citation link chips referencing sources below the answer.
+
+    We avoid trying to align sentences to sources heuristically (can be brittle) and instead
+    provide numbered citation anchors the user can inspect side-by-side. Each chip links to the
+    source section with matching id.
+    """
+    if not sources:
+        return answer
+    chips = []
+    for i, _ in enumerate(sources, 1):
+        chips.append(f'<a href="#src-{i}" style="text-decoration:none;"><span style="background:#1f77b4;color:#fff;padding:2px 6px;border-radius:12px;font-size:0.75rem;margin-right:4px;">{i}</span></a>')
+    chips_html = '<div style="margin-top:0.75rem;">' + ''.join(chips) + '</div>'
+    return answer + chips_html
 
 def get_documents() -> Dict[str, Any]:
     """Get list of all documents."""
@@ -364,74 +380,71 @@ elif page == "Ask Questions":
                         )
 
                     # Display answer(s)
-                    st.markdown("### Answer")
+                    sources = result.get("sources", [])
                     answer_text = result.get("answer", "No answer generated.")
-                    st.markdown(f'<div class="answer-box">{answer_text}</div>', unsafe_allow_html=True)
+                    annotated_answer = annotate_answer_with_citations(answer_text, sources)
+
+                    st.markdown("### Answer & Sources")
+                    a_col, s_col = st.columns([1.4, 1])
+                    with a_col:
+                        st.markdown(f'<div class="answer-box">{annotated_answer}</div>', unsafe_allow_html=True)
+                    with s_col:
+                        if sources:
+                            st.markdown("#### Sources Used")
+                            for i, source in enumerate(sources, 1):
+                                snippet = source.get("snippet") or source.get("text") or "(No snippet)"
+                                page = source.get("page", "?")
+                                score = source.get("score")
+                                section = source.get("section") or ""
+                                meta_line = f"Page {page}"
+                                if section:
+                                    meta_line += f" · {section}"
+                                if score is not None:
+                                    meta_line += f" · score {score:.3f}"
+                                source_id_anchor = f"src-{i}"
+                                st.markdown(
+                                    f'<div id="{source_id_anchor}" class="source-box"><strong>Source {i}</strong><br><em>{meta_line}</em><br>{snippet}</div>',
+                                    unsafe_allow_html=True
+                                )
+                        else:
+                            st.info("No sources returned.")
 
                     # If API returned per-company results (comparison), render those
                     company_results = result.get("company_results") or []
                     if company_results:
-                        st.markdown("### Per-Company Results")
+                        st.markdown("### Per-Company Comparative Results")
                         for comp_res in company_results:
                             comp = comp_res.get("company")
+                            comp_sources = comp_res.get("sources", [])
+                            comp_answer = annotate_answer_with_citations(comp_res.get("answer","No answer"), comp_sources)
                             st.subheader(f"{comp}")
-                            st.markdown(f'<div class="answer-box">{comp_res.get("answer","No answer")}</div>', unsafe_allow_html=True)
+                            c_a_col, c_s_col = st.columns([1.4, 1])
+                            with c_a_col:
+                                st.markdown(f'<div class="answer-box">{comp_answer}</div>', unsafe_allow_html=True)
+                            with c_s_col:
+                                if comp_sources:
+                                    st.markdown("**Sources**")
+                                    for i, source in enumerate(comp_sources, 1):
+                                        snippet = source.get("snippet") or source.get("text") or "(No snippet)"
+                                        page = source.get("page", "?")
+                                        score = source.get("score")
+                                        section = source.get("section") or ""
+                                        meta_line = f"Page {page}"
+                                        if section:
+                                            meta_line += f" · {section}"
+                                        if score is not None:
+                                            meta_line += f" · score {score:.3f}"
+                                        source_id_anchor = f"cmp-{comp}-src-{i}".replace(" ", "_")
+                                        st.markdown(
+                                            f'<div id="{source_id_anchor}" class="source-box"><strong>Source {i}</strong><br><em>{meta_line}</em><br>{snippet}</div>',
+                                            unsafe_allow_html=True
+                                        )
+                                else:
+                                    st.info("No sources for this company.")
                             sources = comp_res.get("sources", [])
-                            if sources:
-                                st.markdown("#### Sources")
-                                for i, source in enumerate(sources, 1):
-                                    with st.container():
-                                        col1, col2 = st.columns([1, 4])
-                                        with col1:
-                                            if source.get("page"):
-                                                st.metric("Page", source["page"])
-                                            if source.get("score"):
-                                                st.caption(f"Score: {source['score']:.3f}")
-                                        with col2:
-                                            rows = source.get("rows") or (source.get("metadata") or {}).get("rows")
-                                            chunk_type = source.get("chunk_type") or (source.get("metadata") or {}).get("chunk_type")
-                                            if rows and isinstance(rows, list) and len(rows) > 0:
-                                                try:
-                                                    if isinstance(rows[0], (list, tuple)):
-                                                        header = [str(h) for h in rows[0]]
-                                                        data = rows[1:] if len(rows) > 1 else []
-                                                        df = pd.DataFrame(data, columns=header)
-                                                        st.markdown(f"**Source {i} — Table (page {source.get('page', 'N/A')})**")
-                                                        st.table(df)
-                                                    else:
-                                                        st.markdown(f'<div class="source-box"><strong>Source {i}</strong><br>{source.get("snippet", source.get("text", "No snippet available"))}</div>', unsafe_allow_html=True)
-                                                except Exception:
-                                                    st.markdown(f'<div class="source-box"><strong>Source {i}</strong><br>{source.get("snippet", source.get("text", "No snippet available"))}</div>', unsafe_allow_html=True)
                     else:
-                        # Legacy single-result rendering
-                        sources = result.get("sources", [])
-                        if sources:
-                            st.markdown("### Sources")
-                            for i, source in enumerate(sources, 1):
-                                with st.container():
-                                    col1, col2 = st.columns([1, 4])
-                                    with col1:
-                                        if source.get("page"):
-                                            st.metric("Page", source["page"])
-                                        if source.get("score"):
-                                            st.caption(f"Score: {source['score']:.3f}")
-                                    with col2:
-                                        rows = source.get("rows") or (source.get("metadata") or {}).get("rows")
-                                        chunk_type = source.get("chunk_type") or (source.get("metadata") or {}).get("chunk_type")
-                                        if rows and isinstance(rows, list) and len(rows) > 0:
-                                            try:
-                                                if isinstance(rows[0], (list, tuple)):
-                                                    header = [str(h) for h in rows[0]]
-                                                    data = rows[1:] if len(rows) > 1 else []
-                                                    df = pd.DataFrame(data, columns=header)
-                                                    st.markdown(f"**Source {i} — Table (page {source.get('page', 'N/A')})**")
-                                                    st.table(df)
-                                                else:
-                                                    st.markdown(f'<div class="source-box"><strong>Source {i}</strong><br>{source.get("snippet", source.get("text", "No snippet available"))}</div>', unsafe_allow_html=True)
-                                            except Exception:
-                                                st.markdown(f'<div class="source-box"><strong>Source {i}</strong><br>{source.get("snippet", source.get("text", "No snippet available"))}</div>', unsafe_allow_html=True)
-                        else:
-                            st.info("No sources found for this question.")
+                        # Per-document single mode already rendered side-by-side above
+                        pass
 
                     # Display verification results if present
                     verification = result.get("verification") or []
@@ -519,5 +532,5 @@ elif page == "Manage Documents":
 
 # Footer
 st.divider()
-st.caption("FinSight v2.0.0 | Powered by Google Gemini & Pinecone")
+st.caption("FinSight v2.0.0 | Powered by Google Gemini & FAISS")
 

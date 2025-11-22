@@ -58,6 +58,7 @@ def register_document(
             "year": year,
             "uploaded_at": datetime.utcnow().isoformat(),
             "chunk_count": 0,  # Will be updated after ingestion
+            "indexing_status": "indexing",  # "indexing", "completed", "failed"
         }
         _save_documents()
         logger.info(f"Registered document: {doc_id} ({filename})")
@@ -106,4 +107,28 @@ def update_chunk_count(doc_id: str, count: int) -> None:
         if doc_id in _documents:
             _documents[doc_id]["chunk_count"] = count
             _save_documents()
+
+
+def set_indexing_status(doc_id: str, status: str) -> None:
+    """Set the indexing status for a document. Status: 'indexing', 'completed', 'failed'."""
+    with _store_lock:
+        _load_documents()
+        if doc_id in _documents:
+            _documents[doc_id]["indexing_status"] = status
+            _save_documents()
+            logger.info(f"Document {doc_id} indexing status: {status}")
+
+
+def is_document_indexed(doc_id: str) -> bool:
+    """Check if a document is fully indexed and ready for queries."""
+    with _store_lock:
+        _load_documents()
+        doc = _documents.get(doc_id)
+        if not doc:
+            return False
+        status = doc.get("indexing_status")
+        # For backward compatibility: if status doesn't exist, assume completed
+        if status is None:
+            return True
+        return status == "completed"
 
